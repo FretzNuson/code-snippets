@@ -1,0 +1,503 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "LogicAppName": {
+         "type": "string",
+         "minLength": 1,
+         "maxLength": 80,
+         "defaultValue": "form-recognizev2-training-007",
+         "metadata": {
+            "description": "Enter your unique logic app name, add a prefix if required"
+         }
+	},
+      "LogicAppLocation": {
+         "type": "string",
+         "minLength": 1,
+         "defaultValue": "[resourceGroup().location]",
+         "metadata": {
+            "description": "The resource location to use for the logic app"
+         }
+      },
+      "SqlServerName": {
+         "type": "string",
+         "defaultValue": "rs-sqlserveless-demo",
+         "metadata": {
+            "description": "Specify the Azure SQL Server name"
+         }
+      },
+      "SqlDatabaseName": {
+         "type": "string",
+         "defaultValue": "training_log_db",
+         "metadata": {
+            "description": "Specify the name of the Azure SQL database"
+         }
+      },
+      "SqldbUsername": {
+         "type": "string",
+         "defaultValue": "sqlserver_rs",
+         "metadata": {
+            "description": "Specify the username of Azure SQL database"
+         }
+      },
+      "SqldbPassword": {
+         "type": "securestring",
+         "metadata": {
+            "description": "Specify a password for Azure SQL database."
+         }
+      },
+      "SqldbConnectionName": {
+         "type": "string",
+         "defaultValue": "sqlapiconnection",
+         "metadata": {
+            "description": "Specify the display name for SQL connection used in Logic Apps"
+         }
+      },
+      "KeyVaultName": {
+         "type": "string",
+         "defaultValue": "frv2vault",
+         "metadata": {
+            "description": "Specify the Azure KeyVault where SAS token & Cognitive API secrets are stored"
+         }
+      }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('LogicAppName')]",
+            "location": "[parameters('LogicAppLocation')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+			"dependsOn": [
+				"[resourceId('Microsoft.Web/connections', parameters('SqldbConnectionName'))]"
+			 ],
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        },
+                        "bob_sas_secret_name": {
+                            "defaultValue": "frv2-training-blob-sas",
+                            "type": "String"
+                        },
+                        "file_path": {
+                            "defaultValue": "trainset",
+                            "type": "String"
+                        },
+                        "form_recognizer_url": {
+                            "defaultValue": "https://testfrv2007.cognitiveservices.azure.com/",
+                            "type": "String"
+                        },
+                        "frv2_api_secret_name": {
+                            "defaultValue": "FRV2-APIKey",
+                            "type": "String"
+                        },
+                        "include_sub_folder": {
+                            "defaultValue": false,
+                            "type": "Bool"
+                        },
+                        "key_vault_name": {
+                            "defaultValue": "[parameters('KeyVaultName')]",
+                            "type": "String"
+                        },
+                        "max_try": {
+                            "defaultValue": 60,
+                            "type": "Int"
+                        },
+                        "use_label_file": {
+                            "defaultValue": false,
+                            "type": "Bool"
+                        }
+                    },
+                    "triggers": {
+                        "manual": {
+                            "type": "Request",
+                            "kind": "Http",
+                            "inputs": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Call_FRV2_Training_API": {
+                            "runAfter": {
+                                "Call_KeyVault_for_FRV2_API_Key": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "body": {
+                                    "source": "@body('Call_KeyValut_for_SAS_Token')['value']",
+                                    "sourceFilter": {
+                                        "includeSubFolders": "@parameters('include_sub_folder')",
+                                        "prefix": "@parameters('file_path')"
+                                    },
+                                    "useLabelFile": "@parameters('use_label_file')"
+                                },
+                                "headers": {
+                                    "Content-Type": "application/json",
+                                    "Ocp-Apim-Subscription-Key": "@{body('Call_KeyVault_for_FRV2_API_Key')['value']}"
+                                },
+                                "method": "POST",
+                                "uri": "@variables('frvv2_url')"
+                            },
+                            "runtimeConfiguration": {
+                                "secureData": {
+                                    "properties": [
+                                        "inputs",
+                                        "outputs"
+                                    ]
+                                }
+                            }
+                        },
+                        "Call_KeyValut_for_SAS_Token": {
+                            "runAfter": {
+                                "Form_FRV2_URL": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://vault.azure.net",
+                                    "type": "ManagedServiceIdentity"
+                                },
+                                "method": "GET",
+                                "uri": "@{concat('https://',parameters('key_vault_name'),'.vault.azure.net/secrets/',parameters('bob_sas_secret_name'),'?api-version=2016-10-01')}"
+                            },
+                            "runtimeConfiguration": {
+                                "secureData": {
+                                    "properties": [
+                                        "outputs"
+                                    ]
+                                }
+                            }
+                        },
+                        "Call_KeyVault_for_FRV2_API_Key": {
+                            "runAfter": {
+                                "Call_KeyValut_for_SAS_Token": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://vault.azure.net",
+                                    "type": "ManagedServiceIdentity"
+                                },
+                                "method": "GET",
+                                "uri": "@{concat('https://',parameters('key_vault_name'),'.vault.azure.net/secrets/',parameters('frv2_api_secret_name'),'?api-version=2016-10-01')}"
+                            },
+                            "runtimeConfiguration": {
+                                "secureData": {
+                                    "properties": [
+                                        "outputs"
+                                    ]
+                                }
+                            }
+                        },
+                        "Form_FRV2_URL": {
+                            "runAfter": {},
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "frvv2_url",
+                                        "type": "string",
+                                        "value": "@{concat(parameters('form_recognizer_url'),'formrecognizer/v2.0-preview/custom/models')}"
+                                    }
+                                ]
+                            }
+                        },
+                        "Loop_exit_variable": {
+                            "runAfter": {
+                                "Retrieve_result_pollingURL": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "loop_status",
+                                        "type": "boolean",
+                                        "value": "@false"
+                                    }
+                                ]
+                            }
+                        },
+                        "Polling_until_training_completiton_or_user-defined_time-out": {
+                            "actions": {
+                                "Condition": {
+                                    "actions": {
+                                        "Exit_Loop": {
+                                            "runAfter": {},
+                                            "type": "SetVariable",
+                                            "inputs": {
+                                                "name": "loop_status",
+                                                "value": "@false"
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Retrieve_Training_status": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "else": {
+                                        "actions": {
+                                            "Set_variable": {
+                                                "runAfter": {},
+                                                "type": "SetVariable",
+                                                "inputs": {
+                                                    "name": "loop_status",
+                                                    "value": "@true"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@variables('str_training_status')",
+                                                    "creating"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "Delay": {
+                                    "runAfter": {
+                                        "Condition": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Wait",
+                                    "inputs": {
+                                        "interval": {
+                                            "count": 2,
+                                            "unit": "Second"
+                                        }
+                                    }
+                                },
+                                "Poll_Training_URL_for_status": {
+                                    "runAfter": {},
+                                    "type": "Http",
+                                    "inputs": {
+                                        "headers": {
+                                            "Ocp-Apim-Subscription-Key": "@{body('Call_KeyVault_for_FRV2_API_Key')['value']}",
+                                            "content-type": "application/json"
+                                        },
+                                        "method": "GET",
+                                        "uri": "@variables('result_pooling_url')"
+                                    }
+                                },
+                                "Retrieve_Training_status": {
+                                    "runAfter": {
+                                        "Poll_Training_URL_for_status": [
+                                            "Succeeded",
+                                            "Failed"
+                                        ]
+                                    },
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "str_training_status",
+                                        "value": "@{body('Poll_Training_URL_for_status')['modelInfo']['status']}"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Set_training_status": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "expression": "@equals(variables('loop_status'), true)",
+                            "limit": {
+                                "count": "@parameters('max_try')",
+                                "timeout": "PT1H"
+                            },
+                            "type": "Until"
+                        },
+                        "Retrieve_result_pollingURL": {
+                            "runAfter": {
+                                "Call_FRV2_Training_API": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "result_pooling_url",
+                                        "type": "string",
+                                        "value": "@{outputs('Call_FRV2_Training_API')['headers']['Location']}"
+                                    }
+                                ]
+                            }
+                        },
+                        "Set_training_status": {
+                            "runAfter": {
+                                "Loop_exit_variable": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "str_training_status",
+                                        "type": "string",
+                                        "value": "creating"
+                                    }
+                                ]
+                            }
+                        },
+                        "Store_Error_Message": {
+                            "runAfter": {
+                                "Call_FRV2_Training_API": [
+                                    "Failed",
+                                    "TimedOut"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "body": {
+                                    "training_output": "@{body('Call_FRV2_Training_API')}",
+                                    "training_status": "Failed"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['sqldatabse']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[cognitive_auto].[frv2_training_dtl]'))}/items"
+                            }
+                        },
+                        "Store_ModelId_and_Training_results": {
+                            "actions": {
+                                "Store_training_output_": {
+                                    "runAfter": {},
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "body": {
+                                            "inference_url": "@{concat(variables('frvv2_url'),'/',body('Poll_Training_URL_for_status')['modelInfo']['modelId'],'/analyze')}",
+                                            "model_id": "@{body('Poll_Training_URL_for_status')['modelInfo']['modelId']}",
+                                            "training_output": "@{body('Poll_Training_URL_for_status')}",
+                                            "training_status": "Success"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['sqldatabse']['connectionId']"
+                                            }
+                                        },
+                                        "method": "post",
+                                        "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[cognitive_auto].[frv2_training_dtl]'))}/items"
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Polling_until_training_completiton_or_user-defined_time-out": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {
+                                    "Store_Training_output": {
+                                        "runAfter": {},
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "body": {
+                                                "model_id": "@{body('Poll_Training_URL_for_status')['modelInfo']['modelId']}",
+                                                "training_output": "@{body('Poll_Training_URL_for_status')}",
+                                                "training_status": "@{if(equals(variables('str_training_status'),'creating'),'Timeout','Failed')}"
+                                            },
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['sqldatabse']['connectionId']"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[cognitive_auto].[frv2_training_dtl]'))}/items"
+                                        }
+                                    }
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "equals": [
+                                            "@variables('str_training_status')",
+                                            "ready"
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "sqldatabse": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', parameters('SqldbConnectionName'))]",
+                                "connectionName": "[parameters('SqldbConnectionName')]",
+								"id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', parameters('LogicAppLocation'), '/managedApis/', 'sql')]"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+      {
+         "type": "MICROSOFT.WEB/CONNECTIONS",
+         "apiVersion": "2016-06-01",
+         "name": "[parameters('SqldbConnectionName')]",
+         "location": "[parameters('LogicAppLocation')]",
+         "properties": {
+            "api": {
+               "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', parameters('LogicAppLocation'), '/managedApis/', 'sql')]"
+            },
+            "displayName": "[parameters('SqldbConnectionName')]",
+            "parameterValues": {
+				"server":"[concat(parameters('SqlServerName'),'.database.windows.net')]",
+				"database":"[parameters('SqlDatabaseName')]",
+				"username":"[parameters('SqldbUsername')]",
+				"password":"[parameters('SqldbPassword')]"
+            }
+         }
+      },
+        {
+            "type": "Microsoft.KeyVault/vaults/accessPolicies",
+            "name": "[concat(parameters('keyVaultName'), '/add')]",
+            "apiVersion": "2019-09-01",
+			"location": "[resourceGroup().location]",
+            "properties": {
+                "accessPolicies": [
+                    {
+                        "tenantId": "[subscription().tenantId]",
+                        "objectId": "[reference(concat('Microsoft.Logic/workflows/', parameters('LogicAppName')), '2017-07-01', 'Full').identity.principalId]",
+                        "permissions": {
+                            "secrets": [
+								"Get" 
+							]
+                        }
+                    }
+                ]
+            }
+        }
+			]
+}
